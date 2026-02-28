@@ -1,0 +1,48 @@
+---
+# Molecule verify: assert expected state after role apply.
+
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+
+    - name: VERIFY | Restic password file exists
+      ansible.builtin.stat:
+        path: "{{ restic_password_file }}"
+      register: pass_file
+
+    - name: VERIFY | Assert password file present and restricted
+      ansible.builtin.assert:
+        that:
+          - pass_file.stat.exists
+          - pass_file.stat.mode == '0600'
+        fail_msg: "Password file missing or has wrong permissions"
+
+    - name: VERIFY | Check restic binary is available
+      ansible.builtin.command: restic version
+      register: restic_ver
+      changed_when: false
+      failed_when: restic_ver.rc != 0
+
+    - name: VERIFY | Assert restic repository can be initialized
+      ansible.builtin.command: >
+        restic init
+        --repo {{ restic_repo_path }}
+        --password-file {{ restic_password_file }}
+      args:
+        creates: "{{ restic_repo_path }}/config"
+      register: repo_init
+      changed_when: "'created restic repository' in repo_init.stdout"
+
+    - name: VERIFY | Confirm repo is accessible
+      ansible.builtin.command: >
+        restic snapshots
+        --repo {{ restic_repo_path }}
+        --password-file {{ restic_password_file }}
+      register: snapshots
+      changed_when: false
+      failed_when: snapshots.rc != 0
+
+    - name: VERIFY | Report
+      ansible.builtin.debug:
+        msg: "restic role verified: repo at {{ restic_repo_path }} is accessible"

@@ -1,0 +1,25 @@
+---
+# roles/restic_backup/meta/main.yml
+
+galaxy_info:
+  role_name: restic_backup
+  author: homelab
+  description: >
+    Deploys systemd service and timer units for scheduled Restic backups.
+    Works alongside the restic role. Supports per-host timer staggering
+    and drop-in overrides for user alignment.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+        - noble
+
+dependencies:
+  - role: restic

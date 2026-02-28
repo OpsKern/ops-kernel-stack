@@ -1,0 +1,30 @@
+# Ansible secrets — never commit these; use *.example counterparts
+vault.yml
+ansible.cfg
+inventory.yml
+*.vault_pass
+.vault_pass
+
+# Ansible runtime artifacts
+*.retry
+.ansible/
+
+# Session checkpoint (internal tool state)
+.checkpoint
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Editor artifacts
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Molecule run artifacts
+molecule/.cache/
+molecule/*/molecule.yml.bak

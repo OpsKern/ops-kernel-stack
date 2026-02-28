@@ -1,0 +1,58 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint & Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible + tools
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Copy example configs
+        run: |
+          cp ansible.cfg.example ansible.cfg
+          cp inventory.yml.example inventory.yml
+          cp group_vars/all/vault.yml.example group_vars/all/vault.yml
+
+      - name: Patch ansible.cfg for CI
+        run: |
+          sed -i 's|<YOUR_ANSIBLE_USER>|ci-user|g' ansible.cfg
+          sed -i 's|<PATH_TO_SSH_KEY>|~/.ssh/id_rsa|g' ansible.cfg
+          sed -i 's|vault_password_file = .*|# vault disabled in CI|g' ansible.cfg
+
+      - name: Syntax check — all playbooks
+        run: |
+          for pb in playbooks/*.yml; do
+            echo "=== Checking: $pb ==="
+            ansible-playbook "$pb" --syntax-check -i inventory.yml || exit 1
+          done
+
+      - name: Syntax check — remediation playbooks
+        run: |
+          for pb in remediation/*.yml; do
+            echo "=== Checking: $pb ==="
+            ansible-playbook "$pb" --syntax-check -i inventory.yml || exit 1
+          done
+
+      - name: ansible-lint
+        run: |
+          ansible-lint playbooks/ remediation/ roles/
+        continue-on-error: true   # lint findings are advisory; don't block merge

@@ -1,0 +1,15 @@
+---
+# Molecule converge: applies the restic role against the test container.
+
+- name: Converge
+  hosts: all
+  become: true
+  tasks:
+    - name: Install restic binary
+      ansible.builtin.apt:
+        name: restic
+        state: present
+        update_cache: true
+
+  roles:
+    - role: restic

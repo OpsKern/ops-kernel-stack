@@ -1,12 +1,13 @@
 ---
-# roles/restic/meta/main.yml
+# roles/common/meta/main.yml
 
 galaxy_info:
-  role_name: restic
+  role_name: common
   author: homelab
   description: >
-    Ansible role to install and manage Restic backups with optional
-    service pause, pruning, and integrity verification.
+    Baseline configuration for all managed hosts. Currently handles
+    passwordless sudo for the Ansible user. Extend with additional
+    baseline tasks as needed (motd, sshd config, UFW rules, etc.).
   license: MIT
   min_ansible_version: "2.14"
   platforms:
