@@ -1,0 +1,16 @@
+---
+# vault.yml.example
+# Copy to vault.yml and encrypt with: ansible-vault encrypt vault.yml
+# All values must use the vault_ prefix. Never commit plaintext secrets.
+#
+# Create your vault: ansible-vault create vault.yml
+
+vault_ansible_sudo_pass: "CHANGE_ME"       # sudo password for ansible_user
+vault_restic_password: "CHANGE_ME"         # Restic repository encryption password
+vault_grafana_admin_password: "CHANGE_ME"  # Grafana admin login
+vault_cloudflare_api_token: "CHANGE_ME"    # Cloudflare DNS API token (for TLS)
+vault_gitea_api_token: "CHANGE_ME"         # Gitea personal access token
+vault_wiki_db_password: "CHANGE_ME"        # Wiki.js PostgreSQL password
+vault_paperless_db_password: "CHANGE_ME"   # Paperless-ngx PostgreSQL password
+vault_paperless_django_secret: "CHANGE_ME" # Paperless-ngx Django secret key
+vault_paperless_gpg_key: "CHANGE_ME"       # GPG key for Paperless document encryption

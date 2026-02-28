@@ -1,0 +1,227 @@
+---
+# Deploy Loki on docker-host — fleet log aggregation backend
+# Loki stores logs on Synology NFS; Grafana datasource provisioned automatically.
+# Run: ansible-playbook playbooks/deploy-loki.yml --check --limit docker-host
+# Run: ansible-playbook playbooks/deploy-loki.yml --limit docker-host
+
+- name: Loki | Deploy log aggregation backend
+  hosts: docker-host
+  become: false
+  vars:
+    loki_version: "3.3.2"
+    loki_config_dir: "{{ synology_loki_config_path }}"
+    loki_data_dir: /mnt/synology/loki
+    compose_dir: /docker-root
+    grafana_datasources_dir: /docker-root/provisioning/datasources
+
+  tasks:
+
+    - name: PRE-FLIGHT | Confirm Synology NFS is mounted
+      ansible.builtin.stat:
+        path: "{{ synology_docker_mount }}"
+      register: synology_stat
+      failed_when: not synology_stat.stat.exists
+
+    # -------------------------------------------------------------------------
+    - name: LOKI | Create config directory
+      ansible.builtin.file:
+        path: "{{ loki_config_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: LOKI | Create data directories (Synology NFS — chunks, rules)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+      loop:
+        - "{{ loki_data_dir }}"
+        - "{{ loki_data_dir }}/chunks"
+        - "{{ loki_data_dir }}/rules"
+
+    - name: LOKI | Create compactor directory (local disk — NFS causes .nfs* lock file errors)
+      ansible.builtin.file:
+        path: /var/lib/loki/compactor
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+      become: true
+
+    - name: LOKI | Deploy loki.yml config
+      ansible.builtin.copy:
+        dest: "{{ loki_config_dir }}/loki.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+        content: |
+          auth_enabled: false
+
+          server:
+            http_listen_port: 3100
+            grpc_listen_port: 9096
+            log_level: warn
+
+          common:
+            instance_addr: 127.0.0.1
+            path_prefix: /loki
+            storage:
+              filesystem:
+                chunks_directory: /loki/chunks
+                rules_directory: /loki/rules
+            replication_factor: 1
+            ring:
+              kvstore:
+                store: inmemory
+
+          schema_config:
+            configs:
+              - from: 2024-01-01
+                store: tsdb
+                object_store: filesystem
+                schema: v13
+                index:
+                  prefix: loki_index_
+                  period: 24h
+
+          ruler:
+            alertmanager_url: http://alertmanager:9093
+
+          compactor:
+            working_directory: /var/lib/loki/compactor
+            delete_request_store: filesystem
+            retention_enabled: true
+
+          limits_config:
+            retention_period: 90d
+            volume_enabled: true
+            max_query_lookback: 90d
+            ingestion_rate_mb: 8
+            ingestion_burst_size_mb: 16
+            allow_structured_metadata: false
+
+          query_range:
+            results_cache:
+              cache:
+                embedded_cache:
+                  enabled: true
+                  max_size_mb: 100
+
+    # -------------------------------------------------------------------------
+    - name: COMPOSE | Add loki service to docker-compose.yml
+      ansible.builtin.blockinfile:
+        path: "{{ compose_dir }}/docker-compose.yml"
+        insertbefore: '^networks:'
+        marker: "  # {mark} ANSIBLE MANAGED BLOCK — loki"
+        block: |2
+            loki:
+              container_name: loki
+              image: grafana/loki:{{ loki_version }}
+              restart: unless-stopped
+              user: "1000:1000"
+              command: -config.file=/etc/loki/loki.yml
+              volumes:
+                - {{ loki_config_dir }}/loki.yml:/etc/loki/loki.yml:ro
+                - {{ loki_data_dir }}:/loki
+                - /var/lib/loki/compactor:/var/lib/loki/compactor
+              ports:
+                - "3100:3100"
+              networks:
+                - monitoring_net
+              labels:
+                - "homelab.role=log-vault"
+              dns:
+                - {{ dns_server_ip }}
+                - {{ gateway_ip }}
+              healthcheck:
+                test: ["CMD-SHELL", "wget --spider -q http://localhost:3100/ready || exit 1"]
+                interval: 30s
+                timeout: 10s
+                retries: 5
+                start_period: 60s
+
+    # -------------------------------------------------------------------------
+    - name: GRAFANA | Ensure datasources provisioning directory exists
+      ansible.builtin.file:
+        path: "{{ grafana_datasources_dir }}"
+        state: directory
+        mode: "0755"
+      become: true
+
+    - name: GRAFANA | Provision Loki datasource
+      ansible.builtin.copy:
+        dest: "{{ grafana_datasources_dir }}/loki.yml"
+        mode: "0644"
+        content: |
+          apiVersion: 1
+          datasources:
+            - name: Loki
+              type: loki
+              uid: loki
+              url: http://loki:3100
+              access: proxy
+              isDefault: false
+              editable: false
+              jsonData:
+                maxLines: 1000
+                derivedFields:
+                  - name: "TraceID"
+                    matcherRegex: "trace_id=(\\w+)"
+                    url: ""
+      become: true
+
+    # -------------------------------------------------------------------------
+    - name: COMPOSE | Start loki container
+      ansible.builtin.command:
+        cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d loki
+        chdir: "{{ compose_dir }}"
+      register: compose_up
+      changed_when: "'Started' in compose_up.stdout or 'Created' in compose_up.stdout"
+      when: not ansible_check_mode
+
+    - name: COMPOSE | Restart Grafana to pick up new datasource
+      ansible.builtin.command:
+        cmd: docker compose -f {{ compose_dir }}/docker-compose.yml restart grafana
+        chdir: "{{ compose_dir }}"
+      changed_when: true
+      when: not ansible_check_mode
+
+    # -------------------------------------------------------------------------
+    - name: VALIDATE | Wait for Loki to be ready
+      ansible.builtin.uri:
+        url: http://localhost:3100/ready
+        status_code: 200
+        timeout: 10
+      retries: 10
+      delay: 6
+      register: loki_ready
+      until: loki_ready.status == 200
+      when: not ansible_check_mode
+
+    - name: VALIDATE | Confirm Loki is healthy
+      ansible.builtin.debug:
+        msg: "Loki is ready at {{ loki_url }} ✓"
+
+    # -------------------------------------------------------------------------
+    - name: COMMIT | Stage docker-compose changes
+      ansible.builtin.shell: |
+        git -C {{ compose_dir }} add docker-compose.yml
+        git -C {{ compose_dir }} diff --cached --quiet || \
+          git -C {{ compose_dir }} commit -m "feat: add Loki log aggregation service (v{{ loki_version }})"
+        echo "staged"
+      register: compose_commit
+      changed_when: "'staged' in compose_commit.stdout"
+      failed_when: false
+
+    - name: SUMMARY | Loki deployment complete
+      ansible.builtin.debug:
+        msg:
+          - "Loki v{{ loki_version }} running on docker-host:3100"
+          - "Config: {{ loki_config_dir }}/loki.yml"
+          - "Data:   {{ loki_data_dir }} (Synology NFS)"
+          - "Grafana datasource: http://loki:3100 (uid: loki)"
+          - "Next: run deploy-promtail-fleet.yml to ship logs from all hosts"

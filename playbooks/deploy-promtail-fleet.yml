@@ -1,0 +1,172 @@
+---
+# Deploy Promtail on all fleet hosts — ships logs to Loki on docker-host
+# Installs as systemd binary service (no Docker required on target hosts).
+# Run: ansible-playbook playbooks/deploy-promtail-fleet.yml --check
+# Run: ansible-playbook playbooks/deploy-promtail-fleet.yml
+
+- name: Promtail | Deploy log shipper fleet-wide
+  hosts: backup_servers:ansible-host
+  become: true
+  vars:
+    promtail_version: "3.3.2"
+    promtail_arch: "amd64"
+    promtail_binary: /usr/local/bin/promtail
+    promtail_config_dir: /etc/promtail
+    loki_push_url: "{{ loki_url }}/loki/api/v1/push"
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    - name: PRE-FLIGHT | Check if Promtail already at correct version
+      ansible.builtin.command: promtail --version
+      register: current_version
+      changed_when: false
+      failed_when: false
+
+    - name: PRE-FLIGHT | Set needs_install fact
+      ansible.builtin.set_fact:
+        needs_install: >-
+          {{ current_version.rc != 0 or
+             promtail_version not in (current_version.stdout | default('')) }}
+
+    # -------------------------------------------------------------------------
+    - name: INSTALL | Ensure unzip is installed (needed to extract .zip release)
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+        update_cache: false
+      when: needs_install
+
+    - name: INSTALL | Download Promtail binary
+      ansible.builtin.get_url:
+        url: "https://github.com/grafana/loki/releases/download/v{{ promtail_version }}/promtail-linux-{{ promtail_arch }}.zip"
+        dest: /tmp/promtail.zip
+        mode: "0644"
+        timeout: 120
+      when: needs_install
+
+    - name: INSTALL | Extract Promtail binary
+      ansible.builtin.unarchive:
+        src: /tmp/promtail.zip
+        dest: /tmp/
+        remote_src: true
+      when: needs_install and not ansible_check_mode
+
+    - name: INSTALL | Place Promtail binary
+      ansible.builtin.copy:
+        src: "/tmp/promtail-linux-{{ promtail_arch }}"
+        dest: "{{ promtail_binary }}"
+        mode: "0755"
+        owner: root
+        group: root
+        remote_src: true
+      when: needs_install and not ansible_check_mode
+      notify: Restart promtail
+
+    - name: INSTALL | Clean up download artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/promtail.zip
+        - "/tmp/promtail-linux-{{ promtail_arch }}"
+      when: needs_install
+
+    # -------------------------------------------------------------------------
+    - name: CONFIG | Create config directory
+      ansible.builtin.file:
+        path: "{{ promtail_config_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "CONFIG | Set positions file path (stonecircle: /tmp noexec workaround)"
+      ansible.builtin.set_fact:
+        promtail_positions_file: >-
+          {{ '/var/tmp/promtail-positions.yaml'
+             if inventory_hostname == 'stonecircle-host'
+             else '/tmp/promtail-positions.yaml' }}
+
+    - name: CONFIG | Detect Docker availability
+      ansible.builtin.stat:
+        path: /var/run/docker.sock
+      register: docker_sock
+
+    - name: CONFIG | Deploy Promtail config
+      ansible.builtin.template:
+        src: ../templates/promtail-config.yml.j2
+        dest: "{{ promtail_config_dir }}/config.yml"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart promtail
+
+    # -------------------------------------------------------------------------
+    - name: SYSTEMD | Deploy promtail service unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/promtail.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Promtail log shipper (Loki agent)
+          Documentation=https://grafana.com/docs/loki/latest/send-data/promtail/
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart={{ promtail_binary }} -config.file={{ promtail_config_dir }}/config.yml
+          Restart=on-failure
+          RestartSec=10s
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=promtail
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart promtail
+
+    - name: SYSTEMD | Reload daemon and enable promtail
+      ansible.builtin.systemd:
+        name: promtail
+        enabled: true
+        daemon_reload: true
+      when: not ansible_check_mode
+
+    # -------------------------------------------------------------------------
+    - name: VALIDATE | Ensure promtail is running
+      ansible.builtin.systemd:
+        name: promtail
+        state: started
+      register: promtail_state
+      when: not ansible_check_mode
+
+    - name: VALIDATE | Wait for Promtail metrics endpoint
+      ansible.builtin.uri:
+        url: http://localhost:9080/metrics
+        status_code: 200
+        timeout: 10
+      retries: 6
+      delay: 5
+      register: promtail_metrics
+      until: promtail_metrics.status == 200
+      ignore_errors: true
+      when: not ansible_check_mode
+
+    - name: VALIDATE | Report status
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: promtail {{ 'OK' if (promtail_metrics.status | default(0)) == 200 else 'SLOW/ERROR — check journalctl -u promtail' }}
+      when: not ansible_check_mode
+
+  handlers:
+    - name: Restart promtail
+      ansible.builtin.systemd:
+        name: promtail
+        state: restarted
+        daemon_reload: true
+      when: not ansible_check_mode

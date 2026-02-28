@@ -1,0 +1,32 @@
+[Unit]
+Description=Restic backup of / on %H (with service pause/resume)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+
+# Base env (no User/Group here; overrides are handled by drop-ins)
+EnvironmentFile={{ restic_env_file | default('/root/.restic/restic.env') }}
+Environment=RESTIC_REPOSITORY=/mnt/synology/restic
+Environment=RESTIC_HOST=%H
+Environment="RESTIC_EXCLUDES=--exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run --exclude=/mnt/synology --exclude=/tmp --exclude=/lost+found"
+
+# Optional hooks
+ExecStartPre=/usr/bin/bash -lc 'test -x /usr/local/sbin/restic-pre-backup && /usr/local/sbin/restic-pre-backup || true'
+
+# Main backup
+ExecStart=/usr/bin/bash -lc 'restic -r "$RESTIC_REPOSITORY" backup / --host "$RESTIC_HOST" --one-file-system $RESTIC_EXCLUDES'
+
+ExecStartPost=/usr/bin/bash -lc 'test -x /usr/local/sbin/restic-post-backup && /usr/local/sbin/restic-post-backup || true'
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+NoNewPrivileges=true
+TimeoutStartSec=7200
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

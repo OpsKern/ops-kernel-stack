@@ -1,0 +1,31 @@
+---
+# roles/restic/defaults/main.yml
+
+# Path to the Restic repository (override in host/group vars)
+restic_repo_path: /mnt/synology/restic
+
+# File containing the Restic password
+restic_password_file: /root/.restic_pass
+
+# Password content (override securely in vault or inventory)
+restic_password: "changeme"
+
+# Paths to include in backup
+restic_backup_paths:
+  - /etc
+  - /var/lib/postgresql
+
+# Paths to exclude from backup
+restic_exclude_paths:
+  - /var/lib/postgresql/15/main/pg_wal
+  - /var/cache
+  - /tmp
+
+# Systemd service names to pause during backup
+restic_pause_services: []
+
+# Snapshot pruning configuration
+restic_prune:
+  keep_last: 7
+  keep_weekly: 4
+  keep_monthly: 3

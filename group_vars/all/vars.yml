@@ -1,0 +1,77 @@
+---
+# group_vars/all/vars.yml
+# Generalizable defaults for the homelab stack.
+# Override per host in host_vars/ or per group in group_vars/<group>/vars.yml.
+
+# ── Identity ──────────────────────────────────────────────────────────────────
+homelab_domain: "example.com"             # Your homelab domain
+homelab_user: "{{ ansible_user }}"        # Primary user (synced from inventory)
+ansible_user_home: "/home/{{ ansible_user }}"
+ansible_dir: "{{ ansible_user_home }}/ansible"
+vault_pass_file: "{{ ansible_user_home }}/.vault_pass"
+
+# ── Infrastructure IPs ────────────────────────────────────────────────────────
+# Set these to your actual host IPs. Prefer using ansible_host from inventory
+# for per-host values; these vars are for cross-host references in playbooks.
+gateway_ip: "x.x.x.1"                    # Default gateway / DNS fallback
+dns_server_ip: "x.x.x.x"                 # Primary DNS server
+docker_host_ip: "x.x.x.x"               # Docker/container host
+synology_ip: "x.x.x.x"                   # NAS / Synology
+pbs_host_ip: "x.x.x.x"                   # Proxmox Backup Server
+ntfy_host_ip: "x.x.x.x"                  # ntfy notification server
+
+# ── Service URLs ──────────────────────────────────────────────────────────────
+loki_url: "http://{{ docker_host_ip }}:3100"
+ntfy_url: "http://{{ ntfy_host_ip }}:8081"
+gitea_base_url: "https://gitea.{{ homelab_domain }}"
+gitea_ansible_repo_url: "{{ gitea_base_url }}/<YOUR_ORG>/ansible-homelab"
+
+# ── Restic ────────────────────────────────────────────────────────────────────
+restic_sftp_repo: "sftp:{{ ansible_user }}@{{ pbs_host_ip }}:/mnt/backup/restic"
+synology_docker_mount: "/mnt/synology/storage_docker"
+synology_loki_config_path: "{{ synology_docker_mount }}/loki/config"
+
+# ── Restic defaults (can override per host) ───────────────────────────────────
+restic_password_file: /root/.restic_pass
+restic_repo_path: /mnt/backup/restic
+
+restic_prune:
+  keep_last: 7
+  keep_weekly: 4
+  keep_monthly: 3
+
+restic_timer_randomized_delay_sec: "30m"
+restic_timer_base_calendar: "03:00"
+restic_timer_increment_minutes: 10
+restic_host_name: "{{ inventory_hostname }}"
+restic_pause_services: []
+
+restic_backup_paths:
+  - /etc
+  - /var
+
+restic_exclude_paths:
+  - /dev
+  - /lost+found
+  - /proc
+  - /run
+  - /sys
+  - /tmp
+  - /var/cache
+  - /var/tmp
+  - /var/lib/apt/lists
+  - /var/lib/systemd/coredump
+  - /var/log/journal
+  - /var/lib/docker/overlay2
+  - /var/lib/docker/aufs
+  - /var/lib/docker/image
+  - /var/lib/docker/containers/*/*-json.log
+  - /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs
+  - /var/lib/containerd/io.containerd.content.v1.content
+  - /var/lib/kubelet/pods
+  - "/var/lib/postgresql/*/main/pg_wal"
+  - "/var/lib/postgresql/*/*/pg_wal"
+
+# ── Remediation bridge ────────────────────────────────────────────────────────
+ntfy_topic: "homelab-alerts"
+bridge_dir: "/opt/remediation-bridge"

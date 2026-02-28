@@ -1,0 +1,366 @@
+---
+# Deploy automated remediation bridge on ansible-host
+# Receives Alertmanager webhooks, runs Ansible playbooks, reports outcomes via ntfy.
+# ansible-host is the ideal location: has vault, SSH keys, all playbooks.
+# Run: ansible-playbook playbooks/deploy-remediation-bridge.yml --check --limit ansible-host
+# Run: ansible-playbook playbooks/deploy-remediation-bridge.yml --limit ansible-host
+
+- name: Remediation Bridge | Deploy automated response service
+  hosts: ansible-host
+  become: false
+  vars:
+    bridge_dir: /opt/remediation-bridge
+    bridge_port: 9999
+    # ansible_dir, vault_pass_file, ntfy_url, ntfy_topic are set in group_vars/all/vars.yml
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    - name: PRE-FLIGHT | Confirm ansible-playbook is reachable
+      ansible.builtin.command: ansible-playbook --version
+      changed_when: false
+      register: ap_check
+      failed_when: ap_check.rc != 0
+
+    - name: PRE-FLIGHT | Confirm Python3 available
+      ansible.builtin.command: python3 --version
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    - name: INSTALL | Ensure pip + venv available
+      ansible.builtin.package:
+        name:
+          - python3-pip
+          - python3-venv
+        state: present
+      become: true
+
+    - name: INSTALL | Create bridge directory
+      ansible.builtin.file:
+        path: "{{ bridge_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+      become: true
+
+    - name: INSTALL | Create Python virtual environment
+      ansible.builtin.command:
+        cmd: python3 -m venv {{ bridge_dir }}/venv
+        creates: "{{ bridge_dir }}/venv/bin/activate"
+
+    - name: INSTALL | Install Python dependencies
+      ansible.builtin.pip:
+        name:
+          - fastapi==0.115.6
+          - uvicorn[standard]==0.34.0
+          - pyyaml==6.0.2
+          - httpx==0.28.1
+        virtualenv: "{{ bridge_dir }}/venv"
+        state: present
+
+    # -------------------------------------------------------------------------
+    - name: BRIDGE | Deploy bridge.py
+      ansible.builtin.copy:
+        dest: "{{ bridge_dir }}/bridge.py"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+        content: |
+          """
+          Homelab Remediation Bridge
+          Receives Alertmanager webhooks, runs Ansible playbooks, reports via ntfy.
+          """
+          import logging
+          import os
+          import subprocess
+          from datetime import datetime, timedelta
+          from typing import Any
+
+          import httpx
+          import yaml
+          from fastapi import BackgroundTasks, FastAPI, Request
+          from fastapi.responses import JSONResponse
+
+          app = FastAPI(title="Homelab Remediation Bridge")
+
+          CONFIG_FILE = os.environ.get("REMEDIATION_MAP", "{{ bridge_dir }}/remediation-map.yml")
+          NTFY_URL    = os.environ.get("NTFY_URL",      "{{ ntfy_url }}")
+          NTFY_TOPIC  = os.environ.get("NTFY_TOPIC",    "{{ ntfy_topic }}")
+          ANSIBLE_DIR = os.environ.get("ANSIBLE_DIR",   "{{ ansible_dir }}")
+          VAULT_PASS  = os.environ.get("VAULT_PASS",    "{{ vault_pass_file }}")
+
+          logging.basicConfig(
+              level=logging.INFO,
+              format="%(asctime)s %(levelname)s %(message)s",
+          )
+          log = logging.getLogger(__name__)
+
+          # In-memory cooldown tracker: {alertname:host -> last_triggered}
+          _cooldowns: dict[str, datetime] = {}
+
+
+          def load_config() -> dict[str, Any]:
+              with open(CONFIG_FILE) as f:
+                  return yaml.safe_load(f) or {}
+
+
+          def notify(title: str, body: str, tags: list[str], priority: str = "default") -> None:
+              # HTTP headers must be ASCII; strip emoji characters from title
+              ascii_title = title.encode("ascii", errors="ignore").decode("ascii").strip()
+              headers = {
+                  "Title":    ascii_title,
+                  "Tags":     ",".join(tags),
+                  "Priority": priority,
+              }
+              try:
+                  httpx.post(f"{NTFY_URL}/{NTFY_TOPIC}", headers=headers, content=body, timeout=10)
+              except Exception as exc:
+                  log.error("ntfy notification failed: %s", exc)
+
+
+          def extract_host(instance: str) -> str:
+              """Strip port from instance label (e.g. 'docker-host:9100' -> 'docker-host')"""
+              return instance.split(":")[0]
+
+
+          def in_cooldown(key: str, minutes: int) -> bool:
+              last = _cooldowns.get(key)
+              return last is not None and datetime.now() - last < timedelta(minutes=minutes)
+
+
+          def run_remediation(alert: dict[str, Any]) -> None:
+              alertname = alert["labels"].get("alertname", "unknown")
+              instance  = alert["labels"].get("instance", "")
+              host      = extract_host(instance)
+              if not host:
+                  log.warning("Alert %s has no instance label — skipping", alertname)
+                  return
+
+              cfg = load_config()
+              mapping = cfg.get("mappings", {}).get(alertname)
+              if not mapping:
+                  log.info("No remediation mapping for alert '%s' — ignoring", alertname)
+                  return
+
+              playbook      = mapping["playbook"]
+              cooldown_mins = int(mapping.get("cooldown_minutes", 15))
+              extra_vars    = mapping.get("extra_vars", {})
+
+              cooldown_key = f"{alertname}:{host}"
+              if in_cooldown(cooldown_key, cooldown_mins):
+                  log.info("Cooldown active for %s — skipping", cooldown_key)
+                  return
+              _cooldowns[cooldown_key] = datetime.now()
+
+              log.info("Running remediation: %s on %s via %s", alertname, host, playbook)
+
+              vars_str = f"target_host={host}"
+              for k, v in extra_vars.items():
+                  vars_str += f" {k}={v}"
+
+              cmd = [
+                  "ansible-playbook",
+                  f"{ANSIBLE_DIR}/{playbook}",
+                  "--limit", host,
+                  "--vault-password-file", VAULT_PASS,
+                  "-e", vars_str,
+              ]
+
+              try:
+                  result = subprocess.run(
+                      cmd,
+                      capture_output=True,
+                      text=True,
+                      timeout=300,
+                      cwd=ANSIBLE_DIR,
+                  )
+              except subprocess.TimeoutExpired:
+                  log.error("Playbook timed out for %s on %s", alertname, host)
+                  notify(
+                      title=f"Remediation timeout: {alertname}",
+                      body=f"Playbook {playbook} timed out on {host}. Manual intervention required.",
+                      tags=["hourglass_flowing_sand"],
+                      priority="high",
+                  )
+                  return
+
+              if result.returncode == 0:
+                  log.info("Remediation succeeded: %s on %s", alertname, host)
+                  notify(
+                      title=f"Auto-remediated: {alertname}",
+                      body=f"Playbook {playbook} completed on {host}.",
+                      tags=["white_check_mark"],
+                      priority="default",
+                  )
+              else:
+                  log.error("Remediation FAILED: %s on %s\n%s", alertname, host, result.stderr[-800:])
+                  notify(
+                      title=f"Remediation failed: {alertname} on {host}",
+                      body=(
+                          f"Playbook {playbook} failed. Manual intervention required.\n\n"
+                          + (result.stderr[-500:] if result.stderr else "No output")
+                      ),
+                      tags=["rotating_light"],
+                      priority="urgent",
+                  )
+
+
+          # ---------------------------------------------------------------------------
+          @app.post("/hook")
+          async def alertmanager_hook(request: Request, background_tasks: BackgroundTasks):
+              try:
+                  payload = await request.json()
+              except Exception:
+                  return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+              status = payload.get("status", "")
+              alerts = payload.get("alerts", [])
+
+              if status != "firing":
+                  return {"status": "ok", "action": "ignored", "reason": f"status={status}"}
+
+              for alert in alerts:
+                  background_tasks.add_task(run_remediation, alert)
+
+              log.info("Queued %d alert(s) for remediation", len(alerts))
+              return {"status": "ok", "queued": len(alerts)}
+
+
+          @app.get("/health")
+          async def health():
+              return {"status": "ok", "config": CONFIG_FILE}
+
+
+          @app.get("/mappings")
+          async def list_mappings():
+              """Show current remediation map (useful for debugging)"""
+              try:
+                  return load_config().get("mappings", {})
+              except Exception as exc:
+                  return JSONResponse({"error": str(exc)}, status_code=500)
+
+      notify: Restart remediation-bridge
+
+    # -------------------------------------------------------------------------
+    - name: BRIDGE | Deploy remediation-map.yml
+      ansible.builtin.copy:
+        dest: "{{ bridge_dir }}/remediation-map.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0644"
+        # Edit this file to add/remove remediations — no restart needed (hot-reload on each webhook)
+        content: |
+          # Homelab Remediation Map
+          # alertname: must match exactly the Prometheus alertname label
+          # playbook: path relative to ansible_dir
+          # cooldown_minutes: min time between re-runs of the same alert+host combo
+          # extra_vars: additional vars passed to the playbook (optional)
+
+          mappings:
+
+            # Container exited / not running
+            ContainerDown:
+              playbook: remediation/restart-container.yml
+              cooldown_minutes: 10
+
+            # Disk > 85%
+            DiskSpaceHigh:
+              playbook: remediation/cleanup-disk.yml
+              cooldown_minutes: 60
+
+            # Systemd service failed
+            SystemdServiceFailed:
+              playbook: remediation/service-restart.yml
+              cooldown_minutes: 15
+
+            # Caddy cert expiry < 7 days (should auto-renew, but just in case)
+            TLSCertExpiringSoon:
+              playbook: remediation/caddy-reload.yml
+              cooldown_minutes: 360
+      notify: Restart remediation-bridge
+
+    # -------------------------------------------------------------------------
+    - name: SYSTEMD | Deploy remediation-bridge service unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/remediation-bridge.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Homelab Automated Remediation Bridge
+          Documentation={{ gitea_ansible_repo_url }}
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User={{ ansible_user }}
+          WorkingDirectory={{ bridge_dir }}
+          Environment=REMEDIATION_MAP={{ bridge_dir }}/remediation-map.yml
+          Environment=NTFY_URL={{ ntfy_url }}
+          Environment=NTFY_TOPIC={{ ntfy_topic }}
+          Environment=ANSIBLE_DIR={{ ansible_dir }}
+          Environment=VAULT_PASS={{ vault_pass_file }}
+          ExecStart={{ bridge_dir }}/venv/bin/uvicorn bridge:app \
+            --host 0.0.0.0 \
+            --port {{ bridge_port }} \
+            --log-level info \
+            --access-log
+          Restart=always
+          RestartSec=5s
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=remediation-bridge
+
+          [Install]
+          WantedBy=multi-user.target
+      become: true
+      notify: Restart remediation-bridge
+
+    - name: SYSTEMD | Reload daemon and enable service
+      ansible.builtin.systemd:
+        name: remediation-bridge
+        enabled: true
+        state: started
+        daemon_reload: true
+      become: true
+      when: not ansible_check_mode
+
+    # -------------------------------------------------------------------------
+    - name: VALIDATE | Wait for bridge health endpoint
+      ansible.builtin.uri:
+        url: http://localhost:{{ bridge_port }}/health
+        status_code: 200
+        timeout: 10
+      retries: 6
+      delay: 5
+      register: bridge_health
+      until: bridge_health.status == 200
+      when: not ansible_check_mode
+
+    - name: VALIDATE | Show available mappings
+      ansible.builtin.uri:
+        url: http://localhost:{{ bridge_port }}/mappings
+        status_code: 200
+        timeout: 5
+      register: bridge_mappings
+      when: not ansible_check_mode
+
+    - name: VALIDATE | Report
+      ansible.builtin.debug:
+        msg:
+          - "Remediation bridge running on ansible-host:{{ bridge_port }} ✓"
+          - "Mappings: {{ bridge_mappings.json | list }}"
+          - "Next: update alertmanager.yml to add webhook to ansible-host:{{ bridge_port }}/hook"
+      when: not ansible_check_mode
+
+  handlers:
+    - name: Restart remediation-bridge
+      ansible.builtin.systemd:
+        name: remediation-bridge
+        state: restarted
+        daemon_reload: true
+      become: true
+      when: not ansible_check_mode

@@ -1,0 +1,55 @@
+---
+# inventory.yml.example
+# Copy to inventory.yml and fill in your host IPs and details.
+# IP tiers (suggestion): Services 10-49 · Infrastructure 50-99 · Nodes 100-254
+
+all:
+  vars:
+    ansible_user: <YOUR_ANSIBLE_USER>
+    ansible_ssh_private_key_file: <PATH_TO_SSH_KEY>
+    ansible_become: true
+
+  children:
+
+    # Hosts that receive restic backups + monitoring agents
+    backup_servers:
+      hosts:
+        docker-host:
+          ansible_host: x.x.x.x      # Container host (Prometheus, Loki, etc.)
+        go-host:
+          ansible_host: x.x.x.x      # Reverse proxy (Caddy)
+        wiki-host:
+          ansible_host: x.x.x.x      # Wiki / docs server
+        stonecircle-host:
+          ansible_host: x.x.x.x      # DNS server
+          ansible_remote_tmp: /var/tmp/.ansible/tmp  # if /tmp is noexec
+        crannog-host:
+          ansible_host: x.x.x.x      # DHCP server
+        oakenspire-host:
+          ansible_host: x.x.x.x      # LXC containers / ntfy
+        pbs-host:
+          ansible_host: x.x.x.x      # Proxmox Backup Server
+          ansible_user: root          # PBS requires root
+
+    # Ansible control host
+    utility:
+      hosts:
+        ansible-host:
+          ansible_host: x.x.x.x
+
+    # Proxmox hypervisors
+    proxmox_hosts:
+      hosts:
+        proxmox-host:
+          ansible_host: x.x.x.x
+          ansible_user: root
+        pve2-host:
+          ansible_host: x.x.x.x
+          ansible_user: root
+
+    # NAS / storage
+    synology_hosts:
+      hosts:
+        synology-host:
+          ansible_host: x.x.x.x
+          ansible_become: false       # DSM has no sudo; use UI for privileged ops

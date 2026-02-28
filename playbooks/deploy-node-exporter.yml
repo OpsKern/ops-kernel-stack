@@ -1,0 +1,133 @@
+---
+# Deploy node_exporter to all fleet hosts
+# Installs node_exporter binary + systemd service on all fleet hosts.
+# docker-host is excluded (already has nodepulse container on port 9100).
+# Run: ansible-playbook playbooks/deploy-node-exporter.yml --check
+# Run: ansible-playbook playbooks/deploy-node-exporter.yml
+
+- name: Deploy node_exporter to fleet
+  hosts: backup_servers:utility
+  vars:
+    node_exporter_version: "1.8.2"
+    node_exporter_arch: "linux-amd64"
+    node_exporter_bin: /usr/local/bin/node_exporter
+    node_exporter_port: 9100
+
+  tasks:
+
+    # --- Preflight ---
+    - name: PREFLIGHT | Skip docker-host (already has nodepulse on port 9100)
+      meta: end_host
+      when: inventory_hostname == "docker-host"
+
+    - name: PREFLIGHT | Check if node_exporter is already installed at correct version
+      command: "{{ node_exporter_bin }} --version"
+      register: ne_version_check
+      changed_when: false
+      failed_when: false
+
+    - name: PREFLIGHT | Set installed flag
+      set_fact:
+        ne_already_installed: >-
+          {{ ne_version_check.rc == 0 and
+             node_exporter_version in ne_version_check.stderr }}
+
+    # --- Install ---
+    - name: INSTALL | Download node_exporter archive
+      get_url:
+        url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}.tar.gz"
+        dest: "/tmp/node_exporter-{{ node_exporter_version }}.tar.gz"
+        mode: "0644"
+      when: not ne_already_installed
+
+    - name: INSTALL | Extract node_exporter binary
+      unarchive:
+        src: "/tmp/node_exporter-{{ node_exporter_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: true
+      when: not ne_already_installed
+
+    - name: INSTALL | Copy binary to /usr/local/bin
+      copy:
+        src: "/tmp/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}/node_exporter"
+        dest: "{{ node_exporter_bin }}"
+        mode: "0755"
+        owner: root
+        group: root
+        remote_src: true
+      when: not ne_already_installed
+      notify: Restart node_exporter
+
+    - name: INSTALL | Clean up downloaded files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/node_exporter-{{ node_exporter_version }}.tar.gz"
+        - "/tmp/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}"
+      when: not ne_already_installed
+
+    # --- Systemd service ---
+    - name: SERVICE | Create node_exporter systemd unit
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          [Unit]
+          Description=Prometheus Node Exporter
+          Documentation=https://github.com/prometheus/node_exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart={{ node_exporter_bin }} \
+            --web.listen-address=:{{ node_exporter_port }} \
+            --collector.systemd \
+            --collector.processes
+          Restart=on-failure
+          RestartSec=5s
+          NoNewPrivileges=true
+          ProtectHome=true
+          ProtectSystem=strict
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart node_exporter
+
+    - name: SERVICE | Enable and start node_exporter
+      systemd:
+        name: node_exporter
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # --- Validate ---
+    - name: VALIDATE | Wait for node_exporter to be reachable
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ node_exporter_port }}"
+        timeout: 15
+
+    - name: VALIDATE | Check metrics endpoint responds
+      uri:
+        url: "http://{{ ansible_host }}:{{ node_exporter_port }}/metrics"
+        return_content: false
+        status_code: 200
+      delegate_to: localhost
+      register: ne_probe
+      retries: 3
+      delay: 3
+
+    - name: VALIDATE | Report status
+      debug:
+        msg: "node_exporter {{ node_exporter_version }} running on {{ inventory_hostname }} ({{ ansible_host }}:{{ node_exporter_port }}) — OK"
+
+  handlers:
+    - name: Restart node_exporter
+      systemd:
+        name: node_exporter
+        state: restarted
+        daemon_reload: true

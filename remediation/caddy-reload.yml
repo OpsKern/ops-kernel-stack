@@ -1,0 +1,39 @@
+---
+# Remediation: reload Caddy to force cert renewal
+# Caddy auto-renews certs but a reload can unstick a stalled renewal.
+
+- name: REMEDIATION | Reload Caddy on go-host
+  hosts: go-host
+  become: true
+
+  tasks:
+
+    - name: CADDY | Check Caddy service status
+      ansible.builtin.command: systemctl is-active caddy
+      register: caddy_status
+      changed_when: false
+      failed_when: false
+
+    - name: CADDY | Reload Caddy (triggers cert check)
+      ansible.builtin.systemd:
+        name: caddy
+        state: reloaded
+      when: caddy_status.stdout == 'active'
+
+    - name: CADDY | Restart if not active
+      ansible.builtin.systemd:
+        name: caddy
+        state: restarted
+      when: caddy_status.stdout != 'active'
+
+    - name: VALIDATE | Confirm Caddy is active
+      ansible.builtin.command: systemctl is-active caddy
+      register: post_status
+      changed_when: false
+      retries: 3
+      delay: 5
+      until: post_status.stdout == 'active'
+
+    - name: VALIDATE | Report
+      ansible.builtin.debug:
+        msg: "Caddy on go-host: {{ post_status.stdout }}"

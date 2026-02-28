@@ -1,0 +1,85 @@
+---
+# Remediation: free up disk space on a host
+# Prunes Docker resources (if Docker present) and vacuums old journal logs.
+# Called by remediation-bridge with -e "target_host=<host>"
+
+- name: REMEDIATION | Cleanup disk on {{ target_host | default('undefined') }}
+  hosts: "{{ target_host }}"
+  become: true
+
+  tasks:
+
+    - name: PRE-FLIGHT | Require target_host
+      ansible.builtin.assert:
+        that: target_host is defined and target_host != ''
+        fail_msg: "target_host must be set"
+
+    - name: PRE-FLIGHT | Check current disk usage
+      ansible.builtin.command: df -h /
+      register: disk_before
+      changed_when: false
+
+    - name: PRE-FLIGHT | Report before state
+      ansible.builtin.debug:
+        msg: "Disk before cleanup:\n{{ disk_before.stdout }}"
+
+    # ---- Journal vacuuming (all hosts) ----
+    - name: CLEANUP | Vacuum journal logs older than 14 days
+      ansible.builtin.command: journalctl --vacuum-time=14d
+      register: journal_vacuum
+      changed_when: "'Deleted archived journal' in journal_vacuum.stdout"
+
+    - name: CLEANUP | Vacuum journal to max 500MB
+      ansible.builtin.command: journalctl --vacuum-size=500M
+      register: journal_size
+      changed_when: "'Deleted archived journal' in journal_size.stdout"
+
+    # ---- Docker cleanup (only if Docker is present) ----
+    - name: CLEANUP | Check Docker presence
+      ansible.builtin.stat:
+        path: /var/run/docker.sock
+      register: docker_sock
+
+    - name: CLEANUP | Prune stopped containers
+      ansible.builtin.command: docker container prune -f
+      when: docker_sock.stat.exists
+      register: container_prune
+      changed_when: "'Total reclaimed space' in container_prune.stdout"
+      become: false
+
+    - name: CLEANUP | Prune dangling images
+      ansible.builtin.command: docker image prune -f
+      when: docker_sock.stat.exists
+      register: image_prune
+      changed_when: "'Total reclaimed space' in image_prune.stdout"
+      become: false
+
+    - name: CLEANUP | Prune unused volumes
+      ansible.builtin.command: docker volume prune -f
+      when: docker_sock.stat.exists
+      register: volume_prune
+      changed_when: "'Total reclaimed space' in volume_prune.stdout"
+      become: false
+
+    # ---- apt cache (if apt-based) ----
+    - name: CLEANUP | Clear apt cache
+      ansible.builtin.apt:
+        autoclean: true
+        autoremove: true
+      when: ansible_pkg_mgr == 'apt'
+      ignore_errors: true
+
+    # ---- Result ----
+    - name: VALIDATE | Check disk usage after cleanup
+      ansible.builtin.command: df -h /
+      register: disk_after
+      changed_when: false
+
+    - name: VALIDATE | Report result
+      ansible.builtin.debug:
+        msg:
+          - "Before: {{ disk_before.stdout_lines[-1] }}"
+          - "After:  {{ disk_after.stdout_lines[-1] }}"
+          - "Journal: {{ journal_vacuum.stdout | regex_search('Freed .*') | default('no old logs') }}"
+          - "Docker containers: {{ container_prune.stdout | regex_search('Total reclaimed space.*') | default('n/a') }}"
+          - "Docker images: {{ image_prune.stdout | regex_search('Total reclaimed space.*') | default('n/a') }}"

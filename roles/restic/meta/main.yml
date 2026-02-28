@@ -1,0 +1,22 @@
+---
+# roles/restic/meta/main.yml
+
+galaxy_info:
+  role_name: restic
+  author: homelab
+  description: >
+    Ansible role to install and manage Restic backups with optional
+    service pause, pruning, and integrity verification.
+  license: MIT
+  min_ansible_version: 2.9
+  platforms:
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+
+dependencies: []

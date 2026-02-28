@@ -1,0 +1,45 @@
+---
+# Remediation: restart a failed systemd service on a host
+# Called by remediation-bridge with -e "target_host=<host> service_name=<name>"
+
+- name: REMEDIATION | Restart failed service on {{ target_host | default('undefined') }}
+  hosts: "{{ target_host }}"
+  become: true
+  vars:
+    service_name: "{{ service | default('') }}"
+
+  tasks:
+
+    - name: PRE-FLIGHT | Require target_host
+      ansible.builtin.assert:
+        that: target_host is defined and target_host != ''
+        fail_msg: "target_host must be set"
+
+    - name: PRE-FLIGHT | Find all failed units (if service_name not set)
+      ansible.builtin.command: systemctl list-units --state=failed --no-legend --no-pager
+      register: failed_units
+      changed_when: false
+      when: service_name == ''
+
+    - name: PRE-FLIGHT | Report failed units
+      ansible.builtin.debug:
+        msg: "Failed units on {{ target_host }}: {{ failed_units.stdout_lines | default(['none']) }}"
+      when: service_name == ''
+
+    - name: REMEDIATE | Restart specific service (if provided)
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: restarted
+      when: service_name != ''
+
+    - name: VALIDATE | Check specific service status
+      ansible.builtin.command: systemctl is-active {{ service_name }}
+      register: svc_status
+      changed_when: false
+      when: service_name != ''
+      failed_when: false
+
+    - name: VALIDATE | Report
+      ansible.builtin.debug:
+        msg: "{{ service_name }} on {{ target_host }}: {{ svc_status.stdout | default('unknown') }}"
+      when: service_name != ''
