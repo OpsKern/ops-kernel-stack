@@ -49,7 +49,7 @@ jobs:
         run: |
           for pb in remediation/*.yml; do
             echo "=== Checking: $pb ==="
-            ansible-playbook "$pb" --syntax-check -i inventory.yml || exit 1
+            ansible-playbook "$pb" --syntax-check -i inventory.yml -e target_host=localhost -e container_name=test || exit 1
           done
 
       - name: ansible-lint
