@@ -1,26 +1,26 @@
 ---
 - name: Show effective service env and identity
-  command: systemctl show restic-backup.service -p User,Group,Environment
+  ansible.builtin.command: systemctl show restic-backup.service -p User,Group,Environment
   register: sysd_env
   changed_when: false
 
 - name: Assert service runs as root
-  assert:
+  ansible.builtin.assert:
     that:
       - "'User=root' in sysd_env.stdout"
       - "'Group=root' in sysd_env.stdout"
     fail_msg: "restic-backup.service is not running as root"
 
 - name: Assert RESTIC_HOST matches inventory host
-  assert:
+  ansible.builtin.assert:
     that:
       - "'RESTIC_HOST={{ inventory_hostname }}' in sysd_env.stdout"
     fail_msg: "RESTIC_HOST is not {{ inventory_hostname }}"
 
 - name: Quick repository access check (no changes)
-  shell: >
-    restic -r "$RESTIC_REPOSITORY" snapshots --host "{{ inventory_hostname }}"
-    --password-command "awk -F= '/^RESTIC_PASSWORD=/ {print $2}'
-    {{ restic_env_file | default('/root/.restic/restic.env') }}" >/dev/null
+  ansible.builtin.command: >
+    restic -r "{{ restic_repo_path }}"
+    --password-file "{{ restic_password_file }}"
+    snapshots --host "{{ inventory_hostname }}"
   register: restic_check
   changed_when: false
