@@ -1,0 +1,21 @@
+---
+- name: SYSTEMD | Configure journal size limits
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: "^#?SystemMaxUse="
+    line: "SystemMaxUse={{ hardening_journal_max_size }}"
+  notify: Restart journald
+
+- name: SYSTEMD | Configure journal rotation
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: "^#?MaxFileSec="
+    line: "MaxFileSec={{ hardening_journal_max_file_sec }}"
+  notify: Restart journald
+
+- name: SYSTEMD | Set DefaultLimitNOFILE
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/system.conf
+    regexp: "^#?DefaultLimitNOFILE="
+    line: "DefaultLimitNOFILE={{ hardening_default_limit_nofile }}"
+  notify: Systemd daemon-reexec

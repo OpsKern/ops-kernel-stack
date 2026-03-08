@@ -1,0 +1,17 @@
+---
+- name: SSH | Deploy hardened sshd_config
+  ansible.builtin.template:
+    src: sshd_config.j2
+    dest: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: "0600"
+    validate: "sshd -t -f %s"
+    backup: true
+  notify: Restart sshd
+
+- name: SSH | Ensure sshd is enabled and running
+  ansible.builtin.systemd:
+    name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+    enabled: true
+    state: started

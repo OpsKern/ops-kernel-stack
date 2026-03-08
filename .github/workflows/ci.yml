@@ -67,6 +67,7 @@ jobs:
           - common
           - restic
           - restic_backup
+          - server_hardening
 
     steps:
       - name: Checkout

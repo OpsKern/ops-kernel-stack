@@ -1,0 +1,23 @@
+---
+- name: FAIL2BAN | Install fail2ban
+  ansible.builtin.apt:
+    name: fail2ban
+    state: present
+  when: hardening_fail2ban_enabled
+
+- name: FAIL2BAN | Deploy jail.local configuration
+  ansible.builtin.template:
+    src: fail2ban_jail_local.j2
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: "0644"
+  when: hardening_fail2ban_enabled
+  notify: Restart fail2ban
+
+- name: FAIL2BAN | Enable and start fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+  when: hardening_fail2ban_enabled

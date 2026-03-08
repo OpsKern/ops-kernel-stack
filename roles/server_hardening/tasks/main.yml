@@ -1,0 +1,42 @@
+---
+# Server hardening entry point. All tasks are idempotent.
+
+- name: HARDENING | Install common packages
+  ansible.builtin.import_tasks: packages.yml
+  tags: [hardening, packages]
+
+- name: HARDENING | Configure user accounts
+  ansible.builtin.import_tasks: users.yml
+  tags: [hardening, users]
+
+- name: HARDENING | Harden SSH configuration
+  ansible.builtin.import_tasks: ssh.yml
+  tags: [hardening, ssh]
+
+- name: HARDENING | Configure firewall (UFW)
+  ansible.builtin.import_tasks: firewall.yml
+  tags: [hardening, firewall]
+
+- name: HARDENING | Configure fail2ban
+  ansible.builtin.import_tasks: fail2ban.yml
+  tags: [hardening, fail2ban]
+
+- name: HARDENING | Apply kernel hardening (sysctl)
+  ansible.builtin.import_tasks: sysctl.yml
+  tags: [hardening, sysctl]
+
+- name: HARDENING | Configure unattended upgrades
+  ansible.builtin.import_tasks: unattended_upgrades.yml
+  tags: [hardening, unattended-upgrades]
+
+- name: HARDENING | Configure NTP
+  ansible.builtin.import_tasks: ntp.yml
+  tags: [hardening, ntp]
+
+- name: HARDENING | Configure systemd defaults
+  ansible.builtin.import_tasks: systemd.yml
+  tags: [hardening, systemd]
+
+- name: HARDENING | Deploy login banner
+  ansible.builtin.import_tasks: banner.yml
+  tags: [hardening, banner]

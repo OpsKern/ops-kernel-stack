@@ -1,0 +1,57 @@
+---
+- name: FIREWALL | Install UFW
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+  when: hardening_ufw_enabled
+
+- name: FIREWALL | Set default incoming policy
+  community.general.ufw:
+    direction: incoming
+    default: "{{ hardening_ufw_default_incoming }}"
+  when: hardening_ufw_enabled
+  notify: Reload UFW
+
+- name: FIREWALL | Set default outgoing policy
+  community.general.ufw:
+    direction: outgoing
+    default: "{{ hardening_ufw_default_outgoing }}"
+  when: hardening_ufw_enabled
+  notify: Reload UFW
+
+- name: FIREWALL | Allow SSH from management sources
+  community.general.ufw:
+    rule: allow
+    port: "{{ hardening_ssh_port | string }}"
+    proto: tcp
+    from_ip: "{{ item }}"
+    comment: "SSH from {{ item }}"
+  loop: "{{ hardening_ufw_ssh_sources }}"
+  when: hardening_ufw_enabled
+  notify: Reload UFW
+
+- name: FIREWALL | Allow Tailscale UDP
+  community.general.ufw:
+    rule: allow
+    port: "{{ hardening_ufw_tailscale_port | string }}"
+    proto: udp
+    from_ip: any
+    comment: "Tailscale WireGuard"
+  when: hardening_ufw_enabled and hardening_ufw_tailscale_udp
+  notify: Reload UFW
+
+- name: FIREWALL | Apply additional UFW rules
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port | string }}"
+    proto: "{{ item.proto | default('tcp') }}"
+    from_ip: "{{ item.from | default('any') }}"
+    comment: "{{ item.comment | default('Managed by Ansible') }}"
+  loop: "{{ hardening_ufw_allow_rules }}"
+  when: hardening_ufw_enabled and hardening_ufw_allow_rules | length > 0
+  notify: Reload UFW
+
+- name: FIREWALL | Enable UFW
+  community.general.ufw:
+    state: enabled
+  when: hardening_ufw_enabled

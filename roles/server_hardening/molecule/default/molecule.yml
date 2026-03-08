@@ -1,0 +1,46 @@
+---
+dependency:
+  name: galaxy
+
+driver:
+  name: docker
+
+platforms:
+  - name: hardening-ubuntu-noble
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /lib/systemd/systemd
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      interpreter_python: auto_silent
+  inventory:
+    host_vars:
+      hardening-ubuntu-noble:
+        hardening_ops_ssh_pubkeys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyForMolecule molecule@test"
+        hardening_ufw_enabled: false       # UFW needs kernel modules unavailable in Docker
+        hardening_fail2ban_enabled: false   # No systemd journal backend in container
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - cleanup
+    - destroy

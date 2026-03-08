@@ -1,0 +1,118 @@
+---
+# roles/server_hardening/defaults/main.yml
+
+# ── User Management ─────────────────────────────────────────────────────────
+hardening_ops_user: "ops"
+hardening_ops_user_shell: "/bin/bash"
+hardening_ops_user_groups: ["sudo"]
+hardening_ops_ssh_pubkeys: []
+# Example:
+#   - "ssh-ed25519 AAAA... admin@company"
+#   - "ssh-ed25519 AAAA... ops@opscairn"
+hardening_disable_root_login: true
+
+# ── SSH ──────────────────────────────────────────────────────────────────────
+hardening_ssh_port: 22
+hardening_ssh_permit_root_login: "no"
+hardening_ssh_password_auth: "no"
+hardening_ssh_pubkey_auth: "yes"
+hardening_ssh_allowed_users: "{{ hardening_ops_user }} {{ ansible_user | default('root') }}"
+hardening_ssh_max_auth_tries: 3
+hardening_ssh_login_grace_time: 30
+hardening_ssh_client_alive_interval: 300
+hardening_ssh_client_alive_count_max: 2
+hardening_ssh_x11_forwarding: "no"
+hardening_ssh_agent_forwarding: "no"
+hardening_ssh_tcp_forwarding: "no"
+hardening_ssh_permit_empty_passwords: "no"
+hardening_ssh_banner: "/etc/issue.net"
+
+# ── Firewall (UFW) ──────────────────────────────────────────────────────────
+hardening_ufw_enabled: true
+hardening_ufw_default_incoming: "deny"
+hardening_ufw_default_outgoing: "allow"
+hardening_ufw_ssh_sources:
+  - "100.64.0.0/10"           # Tailscale CGNAT range
+hardening_ufw_allow_rules: []
+# Example additional rules:
+#   - { port: 80, proto: tcp, from: "any" }
+#   - { port: 443, proto: tcp, from: "any" }
+#   - { port: 9100, proto: tcp, from: "10.0.1.0/24" }  # node_exporter private only
+hardening_ufw_tailscale_udp: true
+hardening_ufw_tailscale_port: 41641
+
+# ── fail2ban ─────────────────────────────────────────────────────────────────
+hardening_fail2ban_enabled: true
+hardening_fail2ban_bantime: "1h"
+hardening_fail2ban_findtime: "10m"
+hardening_fail2ban_maxretry: 5
+hardening_fail2ban_ignoreip: "127.0.0.1/8 ::1 100.64.0.0/10"
+hardening_fail2ban_destemail: ""
+hardening_fail2ban_action: "%(action_)s"
+
+# ── Unattended Upgrades ─────────────────────────────────────────────────────
+hardening_unattended_upgrades_enabled: true
+hardening_unattended_upgrades_mail: ""
+hardening_unattended_upgrades_auto_reboot: true
+hardening_unattended_upgrades_reboot_time: "04:00"
+hardening_unattended_upgrades_remove_unused_deps: true
+
+# ── sysctl (Kernel Hardening) ────────────────────────────────────────────────
+hardening_sysctl_params:
+  # Network hardening
+  net.ipv4.conf.all.rp_filter: 1
+  net.ipv4.conf.default.rp_filter: 1
+  net.ipv4.tcp_syncookies: 1
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.default.send_redirects: 0
+  net.ipv4.conf.all.accept_source_route: 0
+  net.ipv4.conf.default.accept_source_route: 0
+  net.ipv4.conf.all.log_martians: 1
+  net.ipv4.conf.default.log_martians: 1
+  net.ipv4.icmp_echo_ignore_broadcasts: 1
+  net.ipv4.icmp_ignore_bogus_error_responses: 1
+  net.ipv4.ip_forward: 0
+  net.ipv6.conf.all.accept_redirects: 0
+  net.ipv6.conf.default.accept_redirects: 0
+  net.ipv6.conf.all.accept_source_route: 0
+  net.ipv6.conf.default.accept_source_route: 0
+  # Kernel hardening
+  kernel.dmesg_restrict: 1
+  kernel.kptr_restrict: 2
+  kernel.randomize_va_space: 2
+  kernel.yama.ptrace_scope: 1
+  kernel.sysrq: 0
+  fs.suid_dumpable: 0
+  fs.protected_hardlinks: 1
+  fs.protected_symlinks: 1
+
+# ── NTP ──────────────────────────────────────────────────────────────────────
+hardening_ntp_service: "systemd-timesyncd"  # or "chrony"
+
+# ── Systemd ──────────────────────────────────────────────────────────────────
+hardening_journal_max_size: "500M"
+hardening_journal_max_file_sec: "1month"
+hardening_default_limit_nofile: 65536
+
+# ── Common Packages ─────────────────────────────────────────────────────────
+hardening_packages:
+  - curl
+  - jq
+  - htop
+  - vim
+  - tmux
+  - rsync
+  - unzip
+  - net-tools
+  - dnsutils
+  - lsof
+
+# ── Login Banner ─────────────────────────────────────────────────────────────
+hardening_banner_text: |
+  ================================================================
+  WARNING: Unauthorized access to this system is prohibited.
+  All connections are monitored and recorded.
+  Disconnect IMMEDIATELY if you are not an authorized user.
+  ================================================================

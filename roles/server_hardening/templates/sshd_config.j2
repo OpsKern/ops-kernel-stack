@@ -1,0 +1,41 @@
+# {{ ansible_managed }}
+# Role: server_hardening
+
+Port {{ hardening_ssh_port }}
+AddressFamily any
+ListenAddress 0.0.0.0
+ListenAddress ::
+
+# Authentication
+PermitRootLogin {{ hardening_ssh_permit_root_login }}
+PubkeyAuthentication {{ hardening_ssh_pubkey_auth }}
+PasswordAuthentication {{ hardening_ssh_password_auth }}
+PermitEmptyPasswords {{ hardening_ssh_permit_empty_passwords }}
+KbdInteractiveAuthentication no
+UsePAM yes
+
+# Access control
+AllowUsers {{ hardening_ssh_allowed_users }}
+MaxAuthTries {{ hardening_ssh_max_auth_tries }}
+LoginGraceTime {{ hardening_ssh_login_grace_time }}
+
+# Session
+ClientAliveInterval {{ hardening_ssh_client_alive_interval }}
+ClientAliveCountMax {{ hardening_ssh_client_alive_count_max }}
+
+# Forwarding
+X11Forwarding {{ hardening_ssh_x11_forwarding }}
+AllowAgentForwarding {{ hardening_ssh_agent_forwarding }}
+AllowTcpForwarding {{ hardening_ssh_tcp_forwarding }}
+
+# Logging
+SyslogFacility AUTH
+LogLevel VERBOSE
+
+# Misc
+PrintMotd no
+Banner {{ hardening_ssh_banner }}
+AcceptEnv LANG LC_*
+
+# SFTP
+Subsystem sftp /usr/lib/openssh/sftp-server

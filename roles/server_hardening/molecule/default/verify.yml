@@ -1,0 +1,114 @@
+---
+- name: Verify server hardening
+  hosts: all
+  become: true
+  tasks:
+
+    - name: VERIFY | Ops user exists
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ hardening_ops_user | default('ops') }}"
+
+    - name: VERIFY | Sudoers file exists with correct permissions
+      ansible.builtin.stat:
+        path: "/etc/sudoers.d/{{ hardening_ops_user | default('ops') }}"
+      register: sudoers_file
+
+    - name: VERIFY | Assert sudoers file
+      ansible.builtin.assert:
+        that:
+          - sudoers_file.stat.exists
+          - sudoers_file.stat.mode == '0440'
+
+    - name: VERIFY | Read sshd_config
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config
+      register: sshd_content
+
+    - name: VERIFY | Assert SSH hardening
+      ansible.builtin.assert:
+        that:
+          - "'PasswordAuthentication no' in (sshd_content.content | b64decode)"
+          - "'PermitRootLogin no' in (sshd_content.content | b64decode)"
+          - "'X11Forwarding no' in (sshd_content.content | b64decode)"
+          - "'MaxAuthTries 3' in (sshd_content.content | b64decode)"
+          - "'AllowTcpForwarding no' in (sshd_content.content | b64decode)"
+
+    - name: VERIFY | sysctl hardening file exists
+      ansible.builtin.stat:
+        path: /etc/sysctl.d/99-hardening.conf
+      register: sysctl_file
+
+    - name: VERIFY | Assert sysctl file
+      ansible.builtin.assert:
+        that:
+          - sysctl_file.stat.exists
+
+    - name: VERIFY | Read sysctl hardening file
+      ansible.builtin.slurp:
+        src: /etc/sysctl.d/99-hardening.conf
+      register: sysctl_content
+
+    - name: VERIFY | Assert key sysctl params
+      ansible.builtin.assert:
+        that:
+          - "'kernel.dmesg_restrict = 1' in (sysctl_content.content | b64decode)"
+          - "'net.ipv4.tcp_syncookies = 1' in (sysctl_content.content | b64decode)"
+          - "'kernel.randomize_va_space = 2' in (sysctl_content.content | b64decode)"
+
+    - name: VERIFY | Login banner exists
+      ansible.builtin.stat:
+        path: /etc/issue.net
+      register: banner_file
+
+    - name: VERIFY | Assert banner
+      ansible.builtin.assert:
+        that:
+          - banner_file.stat.exists
+
+    - name: VERIFY | Read banner content
+      ansible.builtin.slurp:
+        src: /etc/issue.net
+      register: banner_content
+
+    - name: VERIFY | Assert banner text
+      ansible.builtin.assert:
+        that:
+          - "'Unauthorized access' in (banner_content.content | b64decode)"
+
+    - name: VERIFY | Common packages installed
+      ansible.builtin.command: "dpkg -l {{ item }}"
+      loop:
+        - curl
+        - jq
+        - htop
+        - vim
+      changed_when: false
+
+    - name: VERIFY | Unattended upgrades configured
+      ansible.builtin.stat:
+        path: /etc/apt/apt.conf.d/50unattended-upgrades
+      register: uu_file
+
+    - name: VERIFY | Assert unattended upgrades
+      ansible.builtin.assert:
+        that:
+          - uu_file.stat.exists
+
+    - name: VERIFY | Auto-upgrades configured
+      ansible.builtin.stat:
+        path: /etc/apt/apt.conf.d/20auto-upgrades
+      register: au_file
+
+    - name: VERIFY | Assert auto-upgrades
+      ansible.builtin.assert:
+        that:
+          - au_file.stat.exists
+
+    - name: VERIFY | Journal size configured
+      ansible.builtin.command: grep -c "SystemMaxUse=500M" /etc/systemd/journald.conf
+      changed_when: false
+
+    - name: VERIFY | All checks passed
+      ansible.builtin.debug:
+        msg: "server_hardening role verified on {{ inventory_hostname }}"
