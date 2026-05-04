@@ -29,4 +29,5 @@ Restart=on-failure
 RestartSec=30
 
 [Install]
-WantedBy=multi-user.target
+# WantedBy removed — service is timer-activated only (SUP-10517)
+# Do not re-enable directly; timer is the sole activation mechanism
